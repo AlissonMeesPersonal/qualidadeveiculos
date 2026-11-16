@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS admins (id uuid PRIMARY KEY, singleton boolean NOT NULL DEFAULT true UNIQUE CHECK(singleton), email text UNIQUE NOT NULL, password_hash text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS sessions (token_hash text PRIMARY KEY, admin_id uuid NOT NULL REFERENCES admins(id), expires_at timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS rate_limits (key text PRIMARY KEY, attempts integer NOT NULL DEFAULT 1, reset_at timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS sellers (id uuid PRIMARY KEY, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS vehicles (id uuid PRIMARY KEY, data jsonb NOT NULL, version integer NOT NULL DEFAULT 1, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS sales (id uuid PRIMARY KEY, vehicle_id uuid NOT NULL UNIQUE REFERENCES vehicles(id), seller_id uuid REFERENCES sellers(id), amount numeric(12,2) NOT NULL CHECK(amount > 0), sold_at date NOT NULL, vehicle_name text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS images (id uuid PRIMARY KEY, mime text NOT NULL CHECK(mime IN ('image/jpeg','image/png','image/webp')), bytes bytea NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS audit (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, admin_id uuid REFERENCES admins(id), action text NOT NULL, record_id uuid, created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS vehicles_status_idx ON vehicles ((data->>'status'));
+CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions (expires_at);
