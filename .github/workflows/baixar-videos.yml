@@ -1,0 +1,95 @@
+name: Baixar vídeos do site oficial
+on:
+  push:
+    paths:
+      - '.github/workflows/baixar-videos.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  baixar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Preparar extrator
+        run: python -m pip install --quiet requests beautifulsoup4
+      - name: Baixar vídeos
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib, html, json, os, re
+          from urllib.parse import urljoin
+          import requests
+          from bs4 import BeautifulSoup
+          base='https://www.qualidadeveiculos.com.br/'
+          s=requests.Session()
+          s.headers.update({'User-Agent':'Mozilla/5.0'})
+          r=s.get(base,timeout=50)
+          r.raise_for_status()
+          page=r.text
+          soup=BeautifulSoup(page,'html.parser')
+          os.makedirs('videos-qualidade',exist_ok=True)
+          with open('videos-qualidade/pagina-origem.html','w',encoding='utf8') as f:f.write(page)
+          candidates=[]
+          def add(u,where):
+              if not u or not isinstance(u,str):return
+              u=html.unescape(u.replace('\\/','/').strip())
+              if u.startswith(('data:','blob:','javascript:')):return
+              u=urljoin(base,u)
+              if u not in [a[0] for a in candidates]:candidates.append((u,where))
+          for i,tag in enumerate(soup.find_all('video')):
+              for node in [tag,*tag.find_all('source')]:
+                  for k in ['src','data-src','data-video','data-video-src','data-lazy-src']:
+                      add(node.get(k),'video-'+str(i+1))
+              print('Video',i+1,str(tag)[:500])
+          for tag in soup.find_all(True):
+              for k,v in tag.attrs.items():
+                  if isinstance(v,str) and ('.mp4' in v.lower() or '.webm' in v.lower()):
+                      add(v,'atributo-'+k)
+          pattern=r'''(?:https?:)?//[^\\s"'<>]+?\\.(?:mp4|webm)(?:\\?[^\\s"'<>]*)?|(?:/|\\.\\./)[^\\s"'<>]+?\\.(?:mp4|webm)(?:\\?[^\\s"'<>]*)?'''
+          for m in re.finditer(pattern,page,re.I):add(m.group(0),'codigo-fonte')
+          print('Candidatos:',len(candidates))
+          for u,w in candidates[:20]:print('Link:',w,u[:220])
+          downloads=[]
+          seen=set()
+          for u,w in candidates:
+              try:
+                  with s.get(u,stream=True,timeout=75,headers={'Referer':base}) as v:
+                      v.raise_for_status()
+                      parts=[]; total=0
+                      for c in v.iter_content(1024*1024):
+                          if c:
+                              total+=len(c)
+                              if total>250*1024*1024:raise ValueError('Arquivo grande demais')
+                              parts.append(c)
+                      data=b''.join(parts)
+                      if data[4:8]==b'ftyp':ext='.mp4'
+                      elif data[:4]==bytes([26,69,223,163]):ext='.webm'
+                      else:
+                          print('Não é vídeo:',v.headers.get('Content-Type'))
+                          continue
+                      sha=hashlib.sha256(data).hexdigest()
+                      if sha in seen:continue
+                      seen.add(sha)
+                      downloads.append((u,w,data,ext,sha))
+                      print('Baixado',len(downloads),total,'bytes')
+                      if len(downloads)==2:break
+              except Exception as e:print('Falha:',str(e)[:200])
+          manifest=[]
+          for idx,(u,w,data,ext,sha) in enumerate(downloads):
+              name=('01-institucional' if idx==0 else '02-padrao-de-qualidade')+ext
+              with open('videos-qualidade/'+name,'wb') as f:f.write(data)
+              manifest.append(dict(nome=name,origem=u,contexto=w,tamanho_bytes=len(data),sha256=sha))
+          with open('videos-qualidade/manifesto.json','w',encoding='utf8') as f:
+              json.dump(manifest,f,ensure_ascii=False,indent=2)
+          print('Manifesto:',json.dumps(manifest,ensure_ascii=False))
+          if len(downloads)!=2:raise SystemExit('Não foi possível obter dois vídeos. Página original salva no artefato.')
+          PY
+      - name: Disponibilizar originais
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: videos-originais-qualidade-veiculos
+          path: videos-qualidade/
+          if-no-files-found: error
+          retention-days: 30
